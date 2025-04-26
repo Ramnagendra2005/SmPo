@@ -21,7 +21,6 @@ const Analysis = () => {
     threshold: 0.2,
     triggerOnce: false
   });
-
   // Updated color palette to match home page
   const colors = {
     bgGradient: "from-indigo-50 to-blue-50",

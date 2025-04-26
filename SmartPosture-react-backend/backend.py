@@ -190,6 +190,8 @@ def check_proximity(landmarks):
     shoulder_width = abs(left_shoulder.x - right_shoulder.x)
     if shoulder_width > 0.6:
         send_notification("Move Back! You are too close to the screen.")
+    elif shoulder_width <0.48:
+        send_notification("You are Leaning sit straight")
 
 def calculate_angle(a, b, c):
     a, b, c = np.array(a), np.array(b), np.array(c)
