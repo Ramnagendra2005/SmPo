@@ -7,6 +7,7 @@ const Navbar = () => {
   const [scrolled, setScrolled] = useState(false);
   const { user, logout } = useAuth();
   const location = useLocation();
+  const [profileImageError, setProfileImageError] = useState(false);
 
   // Handle scroll effect
   useEffect(() => {
@@ -17,6 +18,16 @@ const Navbar = () => {
     window.addEventListener("scroll", handleScroll);
     return () => window.removeEventListener("scroll", handleScroll);
   }, []);
+
+  // Log user object
+  useEffect(() => {
+    console.log("User object:", user);
+  }, [user]);
+
+  // Reset image error state when user changes
+  useEffect(() => {
+    setProfileImageError(false);
+  }, [user]);
 
   // Get the user's display name and profile image
   const getUserDisplayName = () => {
@@ -32,8 +43,27 @@ const Navbar = () => {
   };
 
   const getUserProfileImage = () => {
-    if (!user) return "/default-avatar.png";
-    return user.profilePicture || user.picture || user.avatar || user.imageUrl || "/default-avatar.png";
+    // Return default avatar immediately if user is not defined or we've already detected an error
+    if (!user || profileImageError) return "/default-avatar.png";
+    
+    // Check for valid image URL in user object
+    const imageUrl =
+      user.profilePicture ||
+      user.picture ||
+      user.avatar ||
+      user.imageUrl;
+    
+    // If no image URL is found or it's invalid, return default avatar
+    if (!imageUrl) return "/default-avatar.png";
+    
+    // Validate URL format - either it's a full URL or a relative path
+    const isValidUrl = imageUrl.startsWith("http") || imageUrl.startsWith("/");
+    return isValidUrl ? imageUrl : "/default-avatar.png";
+  };
+
+  // Handler for image load errors
+  const handleImageError = () => {
+    setProfileImageError(true);
   };
 
   return (
@@ -147,11 +177,14 @@ const Navbar = () => {
                       className="absolute inset-0 bg-gradient-to-r from-blue-500 to-purple-600 rounded-full"
                       style={{ backgroundSize: "200% 100%", animation: "borderFlow 2s linear infinite" }}
                     ></div>
-                    <img
-                      src={getUserProfileImage()}
-                      alt="Profile"
-                      className="w-10 h-10 rounded-full border border-transparent object-cover relative z-10 bg-gray-800"
-                    />
+                    <div className="w-10 h-10 rounded-full border border-transparent relative z-10 bg-gray-800 overflow-hidden">
+                      <img
+                        src={getUserProfileImage()}
+                        alt="Profile"
+                        className="w-full h-full object-cover"
+                        onError={handleImageError}
+                      />
+                    </div>
                   </div>
                   <span className="bg-gradient-to-r from-blue-500 to-purple-600 bg-clip-text text-transparent text-lg font-medium">
                     {getUserDisplayName()}
@@ -290,11 +323,14 @@ const Navbar = () => {
                     className="absolute inset-0 bg-gradient-to-r from-blue-500 to-purple-600 rounded-full"
                     style={{ backgroundSize: "200% 100%", animation: "borderFlow 2s linear infinite" }}
                   ></div>
-                  <img
-                    src={getUserProfileImage()}
-                    alt="Profile"
-                    className="w-16 h-16 rounded-full object-cover relative z-10 bg-gray-800"
-                  />
+                  <div className="w-16 h-16 rounded-full relative z-10 bg-gray-800 overflow-hidden">
+                    <img
+                      src={getUserProfileImage()}
+                      alt="Profile"
+                      className="w-full h-full object-cover"
+                      onError={handleImageError}
+                    />
+                  </div>
                 </div>
                 <span className="bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent font-medium text-2xl"
                       style={{ backgroundSize: "200% auto", animation: "gradientShift 3s ease infinite" }}>

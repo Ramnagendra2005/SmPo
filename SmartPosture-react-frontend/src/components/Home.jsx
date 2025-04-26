@@ -2,7 +2,7 @@ import React, { useEffect } from "react";
 import { motion, useAnimation } from "framer-motion";
 import { useInView } from "react-intersection-observer";
 import { ChevronDown, Monitor, Activity, Users, Award, ArrowRight } from "lucide-react";
-
+import { useNavigate } from "react-router-dom";
 const Home = () => {
   return (
     <div className="w-full overflow-x-hidden scroll-smooth">
@@ -27,8 +27,11 @@ const Home = () => {
   );
 };
 
-// Hero Section with animated elements and side image
+ // Import useNavigate
+
 const HeroSection = () => {
+  const navigate = useNavigate(); // Initialize useNavigate
+
   return (
     <section className="relative flex items-center min-h-screen px-6 bg-gradient-to-br from-indigo-50 to-blue-50">
       <div className="max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-12 items-center">
@@ -73,7 +76,10 @@ const HeroSection = () => {
             animate={{ opacity: 1, scale: 1 }}
             transition={{ delay: 1, duration: 0.6 }}
           >
-            <button className="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-4 rounded-lg font-bold text-lg transition-all duration-300 transform hover:scale-105 shadow-lg">
+            <button
+              onClick={() => navigate("/analysis")} // Redirect to the Analysis page
+              className="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-4 rounded-lg font-bold text-lg transition-all duration-300 transform hover:scale-105 shadow-lg"
+            >
               Start Your Analysis
             </button>
           </motion.div>
