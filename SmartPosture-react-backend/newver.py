@@ -207,134 +207,106 @@ def initialize_mock_data():
 # -------------------------------
 # Auto-framing functions
 # -------------------------------
-
-
-# -------------------------------
-# Configuration parameters
-# -------------------------------
-auto_frame_enabled   = True
-auto_frame_margin    = 50           # pixels around detected box
-min_visibility       = 0.6          # only use landmarks above this
-prediction_horizon   = 0.2          # seconds ahead to predict
-dt                   = 1.0 / 30     # assuming 30 Hz processing
-kalman_process_noise = 1e-2
-kalman_measure_noise = 1e-1
-
-# -------------------------------
-# Kalman filter for smoothing bbox
-# -------------------------------
-class KalmanBoxFilter:
-    def __init__(self):
-        # state: [x, y, w, h, vx, vy, vw, vh]
-        self.kf = cv2.KalmanFilter(8, 4)
-        # measurement: [x, y, w, h]
-        self.kf.measurementMatrix = np.eye(4, 8, dtype=np.float32)
-        # transition matrix with velocity integration
-        F = np.eye(8, dtype=np.float32)
-        for i in range(4):
-            F[i, i+4] = dt
-        self.kf.transitionMatrix = F
-        self.kf.processNoiseCov     = np.eye(8, dtype=np.float32) * kalman_process_noise
-        self.kf.measurementNoiseCov = np.eye(4, dtype=np.float32) * kalman_measure_noise
-        self.initialized = False
-
-    def correct(self, meas):
-        """Update with measurement [x,y,w,h]."""
-        z = np.array(meas, dtype=np.float32).reshape(4,1)
-        if not self.initialized:
-            # initialize state with first measurement
-            self.kf.statePost[:4,0] = z[:,0]
-            self.kf.statePost[4:,0] = 0
-            self.initialized = True
-        return self.kf.correct(z)
-
-    def predict(self, horizon=0.0):
-        """Predict ahead by horizon seconds (optional)."""
-        if horizon > 0:
-            # temporarily bump transition for horizon
-            Fh = np.eye(8, dtype=np.float32)
-            for i in range(4):
-                Fh[i, i+4] = horizon
-            self.kf.transitionMatrix = Fh
-        p = self.kf.predict()
-        # restore original transition
-        for i in range(4):
-            self.kf.transitionMatrix[i, i+4] = dt
-        return p[:4,0].tolist()
-
-kf_box = KalmanBoxFilter()
-current_frame_rect = None
-
-# -------------------------------
-# Bounding-box extraction
-# -------------------------------
 def get_person_bounding_box(pose_landmarks, frame_shape):
-    """Get bounding box around detected person based on high-confidence landmarks."""
+    """Get bounding box around detected person."""
     if not pose_landmarks:
         return None
-
+    
     h, w = frame_shape[:2]
-    pts = [(lm.x * w, lm.y * h) 
-           for lm in pose_landmarks.landmark 
-           if lm.visibility >= min_visibility]
-    if not pts:
+    landmarks = pose_landmarks.landmark
+    
+    x_coordinates = [landmark.x * w for landmark in landmarks if landmark.visibility > 0.5]
+    y_coordinates = [landmark.y * h for landmark in landmarks if landmark.visibility > 0.5]
+    
+    if not x_coordinates or not y_coordinates:
         return None
+    
+    min_x, max_x = min(x_coordinates), max(x_coordinates)
+    min_y, max_y = min(y_coordinates), max(y_coordinates)
+    
+    # Add some padding
+    padding_x = (max_x - min_x) * 0.2
+    padding_y = (max_y - min_y) * 0.2
+    
+    min_x = max(0, min_x - padding_x)
+    min_y = max(0, min_y - padding_y)
+    max_x = min(w, max_x + padding_x)
+    max_y = min(h, max_y + padding_y)
+    
+    return [int(min_x), int(min_y), int(max_x - min_x), int(max_y - min_y)]
 
-    xs, ys = zip(*pts)
-    x1, x2 = min(xs), max(xs)
-    y1, y2 = min(ys), max(ys)
-
-    # dynamic padding
-    pad_x = (x2 - x1) * 0.25 + auto_frame_margin
-    pad_y = (y2 - y1) * 0.25 + auto_frame_margin
-
-    x1 = max(0, x1 - pad_x)
-    y1 = max(0, y1 - pad_y)
-    x2 = min(w, x2 + pad_x)
-    y2 = min(h, y2 + pad_y)
-
-    return [int(x1), int(y1), int(x2 - x1), int(y2 - y1)]
-
-# -------------------------------
-# Auto-framing application
-# -------------------------------
 def apply_auto_framing(frame, pose_results):
-    """
-    Crop & center the detected person smoothly using Kalman filtering + prediction.
-    Returns a new frame (resized back to original) if enabled, or the unmodified frame.
-    """
-    global current_frame_rect, kf_box
-
+    """Apply auto-framing to center person in frame."""
+    global current_frame_rect, target_frame_rect
+    
     h, w = frame.shape[:2]
-    # 1) measurement & filter update
-    if getattr(pose_results, "pose_landmarks", None):
-        meas = get_person_bounding_box(pose_results.pose_landmarks, frame.shape)
-        if meas:
-            kf_box.correct(meas)
-            x, y, bw, bh = kf_box.predict(horizon=prediction_horizon)
-            # preserve aspect ratio
-            aspect = w / h
-            if bw / bh > aspect:
-                nw, nh = bw, bw / aspect
+    
+    # If pose detected, get bounding box
+    if pose_results.pose_landmarks:
+        person_box = get_person_bounding_box(pose_results.pose_landmarks, frame.shape)
+        
+        if person_box:
+            # Calculate target rectangle for framing
+            x, y, box_w, box_h = person_box
+            
+            # Ensure aspect ratio is maintained with padding
+            aspect_ratio = w / h
+            
+            # Calculate center point of person
+            center_x = x + box_w // 2
+            center_y = y + box_h // 2
+            
+            # Calculate dimensions to maintain aspect ratio
+            if box_w / box_h > aspect_ratio:
+                # Width is the constraining factor
+                frame_w = min(box_w + auto_frame_margin * 2, w)
+                frame_h = frame_w / aspect_ratio
             else:
-                nw, nh = bh * aspect, bh
-            cx, cy = x + bw / 2, y + bh / 2
-            fx = np.clip(cx - nw/2, 0, w - nw)
-            fy = np.clip(cy - nh/2, 0, h - nh)
-            current_frame_rect = [int(fx), int(fy), int(nw), int(nh)]
-
-    # 2) crop & resize if we have a valid rect
+                # Height is the constraining factor
+                frame_h = min(box_h + auto_frame_margin * 2, h)
+                frame_w = frame_h * aspect_ratio
+                
+            # Calculate top-left corner
+            frame_x = max(0, min(center_x - frame_w // 2, w - frame_w))
+            frame_y = max(0, min(center_y - frame_h // 2, h - frame_h))
+            
+            # Set target rectangle
+            target_frame_rect = [int(frame_x), int(frame_y), int(frame_w), int(frame_h)]
+            
+            # Smooth transition
+            if current_frame_rect is None:
+                current_frame_rect = target_frame_rect
+            else:
+                # Apply smoothing
+                current_frame_rect = [
+                    int(current_frame_rect[0] + auto_frame_smoothing * (target_frame_rect[0] - current_frame_rect[0])),
+                    int(current_frame_rect[1] + auto_frame_smoothing * (target_frame_rect[1] - current_frame_rect[1])),
+                    int(current_frame_rect[2] + auto_frame_smoothing * (target_frame_rect[2] - current_frame_rect[2])),
+                    int(current_frame_rect[3] + auto_frame_smoothing * (target_frame_rect[3] - current_frame_rect[3]))
+                ]
+    
+    # If we have a valid frame rect, apply it
     if current_frame_rect and auto_frame_enabled:
-        x, y, cw, ch = current_frame_rect
-        x = int(np.clip(x, 0, w - cw))
-        y = int(np.clip(y, 0, h - ch))
-        cw, ch = int(min(cw, w - x)), int(min(ch, h - y))
-        crop = frame[y:y+ch, x:x+cw]
-        frame = (cv2.resize(crop, (w, h), interpolation=cv2.INTER_LINEAR)
-                 if (cw, ch) != (w, h) else crop)
-        # subtle green indicator
-        cv2.rectangle(frame, (5,5), (25,25), (0,255,0), 2)
-
+        x, y, crop_w, crop_h = current_frame_rect
+        
+        # Ensure boundaries
+        x = max(0, min(x, w - crop_w))
+        y = max(0, min(y, h - crop_h))
+        crop_w = min(crop_w, w - x)
+        crop_h = min(crop_h, h - y)
+        
+        # Crop the region
+        cropped = frame[y:y+crop_h, x:x+crop_w]
+        
+        # Resize back to original frame size if necessary
+        if cropped.shape[0] != h or cropped.shape[1] != w:
+            frame = cv2.resize(cropped, (w, h), interpolation=cv2.INTER_LINEAR)
+        else:
+            frame = cropped
+            
+        # Draw a subtle frame indicator
+        cv2.rectangle(frame, (10, 10), (30, 30), (0, 255, 0), 2)  # Green indicator that auto-framing is active
+    
     return frame
 
 # -------------------------------
@@ -884,84 +856,79 @@ def posture_heatmap():
 # -------------------------------
 # OAuth Configuration for Google Login
 # -------------------------------
-app.secret_key = 'YOUR_SECRET_KEY'
-from authlib.integrations.flask_client import OAuth
 oauth = OAuth(app)
 google = oauth.register(
     name='google',
-    client_id='42043198999-25lgpoq8daebi2ks4khk1bhkcjqo41dg.apps.googleusercontent.com',
-    client_secret='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',
-    access_token_url='https://oauth2.googleapis.com/token',
-    authorize_url='https://accounts.google.com/o/oauth2/v2/auth',
-    server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
-    api_base_url='https://www.googleapis.com/oauth2/v2/',
-    client_kwargs={'scope': 'openid email profile'},
+    client_id='GOOGLE_CLIENT_ID',  # Replace with your Google client ID
+    client_secret='GOOGLE_CLIENT_SECRET',  # Replace with your Google client secret
+    access_token_url='https://accounts.google.com/o/oauth2/token',
+    access_token_params=None,
+    authorize_url='https://accounts.google.com/o/oauth2/auth',
+    authorize_params=None,
+    api_base_url='https://www.googleapis.com/oauth2/v1/',
+    client_kwargs={'scope': 'openid profile email'},
 )
 
 @app.route('/login')
 def login():
-    # The _external parameter is required to build an absolute redirect URL.
-    redirect_uri = url_for('authorize', _external=True)
+    redirect_uri = url_for('auth', _external=True)
     return google.authorize_redirect(redirect_uri)
 
-@app.route('/authorize')
-def authorize():
-    # Exchange the authorization code for a token
+@app.route('/auth')
+def auth():
     token = google.authorize_access_token()
-    # Fetch the user’s profile information from Google
-    resp = google.get('userinfo', token=token)
+    resp = google.get('userinfo')
     user_info = resp.json()
-    # Store the user info in session
-    session['user'] = user_info
-    # After successful login, redirect to the frontend app (adjust URL if needed)
-    return redirect('http://localhost:5173')
-
-@app.route('/api/user')
-def user():
-    # Return the logged-in user’s info as JSON
-    user_info = session.get('user')
-    if user_info:
-        return jsonify(user_info)
-    return jsonify({'error': 'Not logged in'}), 401
+    # You can store user info in session
+    session['profile'] = user_info
+    session['logged_in'] = True
+    return redirect('/')
 
 @app.route('/logout')
 def logout():
-    session.pop('user', None)
-    # Redirect back to the frontend landing page
-    return redirect('http://localhost:5173')
+    session.pop('profile', None)
+    session.pop('logged_in', None)
+    return redirect('/')
+
 # -------------------------------
-# Protected routes (corrected redirects)
+# Application routes for pages
 # -------------------------------
 @app.route('/dashboard')
 def dashboard():
+    # Check if user is logged in
     if not session.get('logged_in'):
-        return redirect(url_for('login'))
+        return redirect('/login')
     return render_template('dashboard.html')
 
 @app.route('/reports')
 def reports():
+    # Check if user is logged in
     if not session.get('logged_in'):
-        return redirect(url_for('login'))
+        return redirect('/login')
     return render_template('reports.html')
 
 @app.route('/settings')
 def settings():
+    # Check if user is logged in
     if not session.get('logged_in'):
-        return redirect(url_for('login'))
+        return redirect('/login')
     return render_template('settings.html')
-
-
 
 @app.route('/api/settings', methods=['GET'])
 def get_settings():
+    # Return current auto-framing settings
     return jsonify({
         "auto_frame_enabled": auto_frame_enabled,
         "auto_frame_margin": auto_frame_margin,
         "auto_frame_smoothing": auto_frame_smoothing
     })
 
+# -------------------------------
+# Main function
+# -------------------------------
 if __name__ == "__main__":
+    # Initialize mock data for graphs
     initialize_mock_data()
+    
+    # Run the Flask app
     app.run(debug=True, threaded=True)
-
-
